@@ -1,0 +1,994 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lyrics Builder</title>
+<meta name="description" content="Turn worship lyric PDFs into reusable song sections, a song order, and text for Proclaim.">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<style>
+  :root {
+    color-scheme: dark;
+    --app-font: Arial, "Helvetica Neue", Helvetica, sans-serif;
+    --page: #10241f;
+    --panel: #19332b;
+    --field: #214338;
+    --card: #142b24;
+    --border: #36584b;
+    --border-strong: #507967;
+    --text: #f2f8f4;
+    --muted: #b2cabe;
+    --accent: #a8ddbf;
+    --accent-strong: #356e53;
+    --warning-bg: #553b13;
+    --warning-text: #f1bd55;
+    --success-bg: #123f2b;
+    --success-text: #65d79a;
+    --danger: #ff7b86;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { min-height: 100%; margin: 0; background: var(--page); color: var(--text); }
+
+  body {
+    min-height: 100vh;
+    padding: 14px 18px 18px;
+    font-family: var(--app-font);
+    font-size: 14px;
+    line-height: 1.4;
+  }
+
+  button, select, textarea { font: inherit; }
+  button {
+    border: 1px solid var(--border-strong);
+    border-radius: 9px;
+    background: #274b3c;
+    color: var(--text);
+    padding: 8px 13px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: border-color 120ms ease, background 120ms ease, transform 120ms ease;
+  }
+  button:hover { border-color: #8cbfa3; background: #335d4b; }
+  button:active { transform: translateY(1px); }
+  button:disabled { cursor: not-allowed; opacity: 0.45; }
+  button.primary { background: var(--accent-strong); border-color: var(--accent-strong); color: white; }
+  button.primary:hover { background: #417f62; }
+  button.link-button { padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--accent); font-size: 13px; }
+  button.link-button:hover { background: transparent; color: #d3eee0; }
+  button.compact { padding: 6px 9px; border-radius: 8px; font-size: 12px; }
+
+  .app-grid {
+    display: grid;
+    grid-template-columns: minmax(370px, 0.72fr) minmax(560px, 1.08fr);
+    gap: 12px;
+    height: calc(100vh - 32px);
+    min-height: 760px;
+  }
+  .panel {
+    min-width: 0;
+    min-height: 0;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 13px;
+    box-shadow: 0 1px 0 rgba(255,255,255,0.02) inset;
+  }
+  .editor-panel { display: flex; flex-direction: column; gap: 18px; padding: 16px; }
+  .preview-panel { display: flex; flex-direction: column; gap: 14px; padding: 16px; overflow: auto; }
+  .field-block { display: flex; flex-direction: column; min-height: 0; }
+  .piece-block { flex: 1 1 auto; }
+  .field-heading, .preview-heading, .preflight-title, .export-actions, .utility-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .field-heading { flex-wrap: wrap; }
+  .field-heading, .preview-heading { justify-content: space-between; margin-bottom: 7px; }
+  .field-heading strong, .preview-heading h1, .preflight-title strong { margin: 0; font-size: 14px; font-weight: 800; }
+  .preview-heading h1 { font-size: 17px; }
+  .label-note { color: var(--muted); font-size: 12px; font-weight: 600; }
+  .utility-actions { justify-content: flex-end; flex-wrap: wrap; }
+  .font-choice { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 14px; }
+  .font-choice select { min-width: 0; padding: 6px 24px 6px 8px; }
+
+  textarea, select { color: var(--text); background: var(--field); border: 1px solid var(--border-strong); outline: none; }
+  textarea:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(168,221,191,0.28); }
+  textarea {
+    width: 100%;
+    padding: 11px 12px;
+    border-radius: 9px;
+    resize: vertical;
+    font-family: var(--app-font);
+    font-size: 16px;
+    font-weight: 400;
+    line-height: 1.45;
+  }
+  #arrangement { min-height: 79px; }
+  #piece { flex: 1 1 auto; min-height: 400px; resize: none; }
+  #whitespaceDebug {
+    flex: 1 1 auto;
+    min-height: 400px;
+    margin: 0;
+    overflow: auto;
+    padding: 11px 12px;
+    border: 1px solid var(--border-strong);
+    border-radius: 9px;
+    background: var(--field);
+    color: var(--text);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 14px;
+    white-space: pre-wrap;
+  }
+  #whitespaceDebug mark { color: inherit; border-radius: 2px; }
+  #whitespaceDebug mark.sp { background: transparent; color: #9ebbab; }
+  #whitespaceDebug mark.nbsp { background: rgba(168,221,191,0.26); }
+  #whitespaceDebug mark.tab { background: rgba(255,123,134,0.26); }
+  #whitespaceDebug mark.other { background: rgba(241,189,85,0.28); }
+  .field-help { margin: 8px 0 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+  .song-summary { margin: 0; color: var(--muted); font-size: 14px; }
+  .song-summary:empty { display: none; }
+  .pdf-status { min-height: 18px; margin-top: 7px; color: var(--muted); font-size: 12px; }
+
+  .preview-heading { align-items: flex-start; margin-bottom: 0; }
+  .preview-subtitle { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
+  .preview-controls { display: flex; align-items: flex-end; justify-content: flex-end; gap: 12px; flex-wrap: wrap; }
+  .select-wrap { display: flex; flex-direction: column; gap: 4px; color: var(--text); font-size: 12px; font-weight: 700; }
+  select { min-width: 94px; padding: 8px 30px 8px 10px; border-radius: 8px; }
+  .checkbox-row { display: flex; align-items: center; gap: 7px; padding-bottom: 8px; color: var(--text); font-size: 13px; font-weight: 700; white-space: nowrap; }
+  input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var(--accent-strong); }
+
+  .preflight { flex: 0 0 auto; max-height: 150px; overflow: auto; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: #274b3c; }
+  .preflight-title { justify-content: space-between; margin-bottom: 10px; }
+  #warningCount { color: var(--muted); font-size: 12px; }
+  .check-list { display: grid; gap: 6px; }
+  .check-message { padding: 7px 9px; border-radius: 6px; font-size: 12px; }
+  .check-message.warning { background: var(--warning-bg); color: var(--warning-text); }
+  .check-message.success { background: var(--success-bg); color: var(--success-text); }
+
+  .slides-shell { flex: 1 1 auto; min-height: 140px; overflow: hidden; }
+  .slides-scroll { height: 100%; overflow-y: auto; padding-right: 5px; scrollbar-color: #6e9b82 #1b362c; scrollbar-width: auto; }
+  .slides-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  .slide-card {
+    position: relative;
+    display: grid;
+    place-items: center;
+    aspect-ratio: 16 / 9;
+    min-height: 140px;
+    overflow: hidden;
+    padding: 38px 18px 22px;
+    border: 1px solid var(--border);
+    border-radius: 11px;
+    background: var(--card);
+  }
+  .slide-label { position: absolute; top: 13px; left: 14px; color: var(--accent); font-size: 12px; font-weight: 900; letter-spacing: 0.025em; text-transform: uppercase; }
+  .slide-number { position: absolute; top: 10px; right: 11px; color: var(--muted); font-size: 11px; }
+  .slide-text { width: 100%; color: var(--text); font-size: clamp(13px, 1.05vw, 17px); font-weight: 600; line-height: 1.25; text-align: center; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .slide-card.blank .slide-text { color: var(--muted); font-size: 11px; font-weight: 800; letter-spacing: 0.22em; }
+  .empty-preview { display: grid; min-height: 220px; place-items: center; border: 1px dashed var(--border-strong); border-radius: 11px; color: var(--muted); text-align: center; }
+
+  .export-area { flex: 0 0 auto; padding-top: 12px; border-top: 1px solid var(--border); }
+  .export-actions { flex-wrap: wrap; }
+  .export-status { min-height: 18px; margin: 7px 0 0; color: var(--success-text); font-size: 12px; }
+  details { margin-top: 5px; }
+  summary { color: var(--accent); cursor: pointer; font-size: 13px; font-weight: 750; }
+  details pre { max-height: 180px; margin: 8px 0 0; overflow: auto; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); color: var(--text); font: 14px/1.45 var(--app-font); white-space: pre-wrap; }
+
+  @media (max-width: 1180px) {
+    .app-grid { grid-template-columns: minmax(340px, 0.82fr) minmax(500px, 1.18fr); }
+    .slides-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 900px) {
+    body { padding: 10px; }
+    .app-grid { display: flex; height: auto; min-height: auto; flex-direction: column; }
+    .slides-scroll { max-height: 560px; }
+    .editor-panel, .preview-panel { min-height: 720px; }
+    #piece, #whitespaceDebug { min-height: 450px; }
+  }
+  @media (max-width: 600px) {
+    .slides-grid { grid-template-columns: 1fr; }
+    .preview-heading { flex-direction: column; }
+    .preview-controls { justify-content: flex-start; }
+    .field-heading { align-items: flex-start; }
+    .utility-actions { justify-content: flex-start; }
+  }
+</style>
+</head>
+<body>
+
+<main class="app-grid">
+  <section class="panel editor-panel" aria-label="Lyrics editor">
+    <div class="field-block">
+      <div class="field-heading">
+        <strong>Song order <span class="label-note">(from your PDF)</span></strong>
+        <div class="utility-actions">
+          <label class="font-choice" for="appFont">Font
+            <select id="appFont">
+              <option value="arial">Arial</option>
+              <option value="verdana">Verdana</option>
+              <option value="georgia">Georgia</option>
+              <option value="mono">Monospace</option>
+            </select>
+          </label>
+          <button class="compact" id="importPdfBtn" type="button">Import PDF</button>
+          <button class="compact" id="loadExample" type="button">Example</button>
+          <button class="compact" id="clearAll" type="button">Clear</button>
+          <input type="file" id="pdfInput" accept="application/pdf" hidden>
+        </div>
+      </div>
+      <textarea aria-label="Song order" id="arrangement" spellcheck="false" placeholder="Blank, Verse 1, Chorus, Verse 2, Chorus, Blank"></textarea>
+      <div class="pdf-status" id="pdfStatus" role="status"></div>
+    </div>
+
+    <div class="field-block piece-block">
+      <div class="field-heading">
+        <strong>Lyric sections <span class="label-note">(each version once)</span></strong>
+        <div class="utility-actions">
+          <button class="link-button" id="inspectWhitespace" type="button">Inspect whitespace</button>
+          <button class="link-button" id="fixLineBreaks" type="button">Restore hidden breaks</button>
+        </div>
+      </div>
+      <textarea aria-label="Lyric sections" id="piece" spellcheck="false" placeholder="Verse 1&#10;Lyric line one&#10;Lyric line two&#10;&#10;Chorus&#10;Chorus lyric line"></textarea>
+      <pre id="whitespaceDebug" hidden></pre>
+      <p class="field-help">Singer names appear in brackets on each section’s first lyric line. Blank lines set slide breaks after you apply them.</p>
+    </div>
+  </section>
+
+  <section class="panel preview-panel" aria-label="Slide preview">
+    <div class="preview-heading">
+      <div>
+        <h1>Slide preview</h1>
+        <p class="preview-subtitle">Proclaim controls the final font, capitalization, and background.</p>
+      </div>
+      <div class="preview-controls">
+        <label class="select-wrap" for="linesPerSlide">Lines per slide
+          <select id="linesPerSlide">
+            <option value="1">1</option>
+            <option value="2" selected>2</option>
+            <option value="3">3</option>
+            <option value="4">4</option>
+          </select>
+        </label>
+        <label class="checkbox-row"><input type="checkbox" id="suggestBreaks" checked>Auto-format slides</label>
+        <button id="applyBreaks" type="button">Apply breaks</button>
+      </div>
+    </div>
+
+    <p id="songSummary" class="song-summary" role="status"></p>
+    <div class="preflight">
+      <div class="preflight-title"><strong>Review</strong><span id="warningCount">0 warnings</span></div>
+      <div class="check-list" id="preflightMessages"></div>
+    </div>
+
+    <div class="slides-shell">
+      <div class="slides-scroll"><div class="slides-grid" id="slidesGrid"></div></div>
+    </div>
+
+    <div class="export-area">
+      <div class="export-actions">
+        <button class="primary" id="copyProclaim" type="button">1. Copy Proclaim lyrics</button>
+        <button id="copyOrder" type="button">2. Copy song order</button>
+        <button id="downloadText" type="button">Download lyrics .txt</button>
+      </div>
+      <p class="field-help">Paste lyrics into the song’s text box, then enable <strong>Custom verse order</strong> and paste the song order. Instrumental holds and optional vocals use Blank.</p>
+      <p class="export-status" id="exportStatus" role="status"></p>
+      <details><summary>View slides in song order</summary><pre id="arrangedLyrics"></pre></details>
+      <details><summary>View Proclaim lyrics</summary><pre id="proclaimImport"></pre></details>
+      <details><summary>View Proclaim song order</summary><pre id="proclaimOrder"></pre></details>
+    </div>
+  </section>
+</main>
+
+<script>
+// Lyric sections are stored once. The song order carries every repetition.
+const SECTION_KIND = '(?:post[ -]*chorus|pre[ -]*chorus|verse|chorus|bridge|refrain|tag|interlude|instrumental|intro|outro|vamp|coda|turnaround|break[ -]*down|break|end(?:ing)?|solo|prelude|postlude|blank)';
+const HEADER_TOKEN = SECTION_KIND + '\\s*\\d*';
+const HEADER_LINE_RE = new RegExp('^(' + SECTION_KIND + ')\\s*(\\d*)$', 'i');
+const PDF_SECTION_HEADER_RE = new RegExp('^\\s*(' + SECTION_KIND + ')(?:\\s*(\\d+))?(?=\\s|:|/|&|$)', 'i');
+const OPTIONAL_VOCALS_RE = /\boptional\s+(?:vocals?|ad[ -]*libs?)\b|\bad[ -]*libs?\b/i;
+const PDF_DIRECTION_RE = /^(?:build|soft|quiet|loud|full\s+band|instrumental|no\s+vocals?|repeat|[x×]\s*\d+)(?:\s*[.!])?$/i;
+const BUILTIN_PROCLAIM_RE = /^(?:verse|chorus|pre-chorus|bridge|tag|interlude|blank)(?:\s+\d+)?$/i;
+const arrangementEl = document.getElementById('arrangement');
+const pieceEl = document.getElementById('piece');
+const linesPerSlideEl = document.getElementById('linesPerSlide');
+const suggestBreaksEl = document.getElementById('suggestBreaks');
+const slidesGridEl = document.getElementById('slidesGrid');
+const preflightMessagesEl = document.getElementById('preflightMessages');
+const warningCountEl = document.getElementById('warningCount');
+const arrangedLyricsEl = document.getElementById('arrangedLyrics');
+const proclaimImportEl = document.getElementById('proclaimImport');
+const proclaimOrderEl = document.getElementById('proclaimOrder');
+const exportStatusEl = document.getElementById('exportStatus');
+const whitespaceDebugEl = document.getElementById('whitespaceDebug');
+let importWarnings = [];
+let songFilename = 'lyrics';
+let importRequest = 0;
+
+function normalizeLineBreaks(text) {
+  return String(text).replace(/\r\n?/g, '\n').replace(/[\u2028\u2029]/g, '\n');
+}
+
+function canonicalBase(value) {
+  const key = value.toLowerCase().replace(/[ -]/g, '');
+  if (key === 'prechorus') return 'Pre-chorus';
+  if (key === 'postchorus') return 'Post-chorus';
+  if (key === 'end' || key === 'ending') return 'Ending';
+  if (key === 'breakdown') return 'Breakdown';
+  return key.charAt(0).toUpperCase() + key.slice(1);
+}
+
+function parseEditableHeader(text) {
+  const line = text.trim();
+  const match = line.match(HEADER_LINE_RE);
+  if (match) return canonicalBase(match[1]) + (match[2] ? ' ' + Number(match[2]) : '');
+  const custom = line.match(/^\{([^{}\n]+)\}$/);
+  return custom ? custom[1].trim() : null;
+}
+
+function sectionKey(text) {
+  return (parseEditableHeader(text) || text.trim()).toLowerCase().replace(/\s+/g, ' ');
+}
+
+function lyricSignature(lines) {
+  // Case, punctuation, PDF wrapping and smart quotes do not change the lyrics.
+  return lines.join(' ').normalize('NFKC').toLowerCase()
+    .replace(/['\u2018\u2019]/g, '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
+
+function trimSections(sections) {
+  for (const section of Object.values(sections)) {
+    while (section.lines.length && !section.lines[0].trim()) section.lines.shift();
+    while (section.lines.length && !section.lines.at(-1).trim()) section.lines.pop();
+  }
+}
+
+function parseStrict(text) {
+  const sections = Object.create(null);
+  const issues = [];
+  Object.defineProperty(sections, '_issues', { value: issues });
+  let current = null;
+  function finish() {
+    if (!current) return;
+    const key = sectionKey(current.label);
+    if (sections[key]) {
+      if (lyricSignature(sections[key].lines) !== lyricSignature(current.lines)) {
+        issues.push('“' + current.label + '” has two different definitions. Give the changed lyrics their own numbered heading.');
+      }
+    } else sections[key] = current;
+  }
+  for (const raw of normalizeLineBreaks(text).split('\n')) {
+    const label = parseEditableHeader(raw);
+    if (label) {
+      finish();
+      current = { label, lines: [] };
+    } else if (current) current.lines.push(raw.trimEnd());
+  }
+  finish();
+  trimSections(sections);
+  return sections;
+}
+
+function parseFlattened(text) {
+  const matches = [...text.matchAll(new RegExp('\\b(' + HEADER_TOKEN + ')\\b', 'gi'))];
+  return parseStrict(matches.map((match, i) => {
+    const end = i + 1 < matches.length ? matches[i + 1].index : text.length;
+    const body = text.slice(match.index + match[0].length, end).replace(/[ \t\u00a0]{2,}/g, '\n\n');
+    return match[1].trim() + '\n' + body.trim();
+  }).join('\n\n'));
+}
+
+function parsePiece(text) {
+  const normalized = normalizeLineBreaks(text);
+  if (normalized.includes('\n')) return parseStrict(normalized);
+  const strict = parseStrict(normalized);
+  const loose = parseFlattened(normalized);
+  return Object.keys(loose).length > Object.keys(strict).length ? loose : strict;
+}
+
+function parseArrangement(text) {
+  return normalizeLineBreaks(text).split(/[,\n]/).map(value => value.trim()).filter(Boolean)
+    .map(value => parseEditableHeader(value) || value);
+}
+
+function groupExplicitSlides(lines) {
+  const groups = [];
+  let current = [];
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (line) current.push(line);
+    else if (current.length) { groups.push(current); current = []; }
+  }
+  if (current.length) groups.push(current);
+  return groups;
+}
+
+function splitLyricLine(text) {
+  const line = text.trim().replace(/\s+/g, ' ');
+  // Keep a singer cue intact and attached to the first lyric phrase.
+  const singerCue = line.match(/^(\[[^\]\r\n]+\])\s+(.+)$/);
+  if (singerCue) {
+    const parts = splitLyricLine(singerCue[2]);
+    parts[0] = singerCue[1] + ' ' + parts[0];
+    return parts;
+  }
+  if (line.length < 29) return [line];
+  const words = line.split(' ');
+  const candidates = [];
+  for (let i = 2; i <= words.length - 2; i++) {
+    const left = words.slice(0, i).join(' '), right = words.slice(i).join(' ');
+    if (left.length < 10 || right.length < 10) continue;
+    const punctuation = /[,;:!?]$/.test(left);
+    const conjunction = /^(?:and|but|for|so|yet|when|where|who|that|then)$/i.test(words[i]);
+    if (line.length <= 38 && !punctuation && !conjunction) continue;
+    const score = Math.abs(left.length - right.length) + Math.max(0, left.length - 38) * 3
+      + Math.max(0, right.length - 38) * 3 - (punctuation ? 14 : conjunction ? 10 : 0);
+    candidates.push({ left, right, score });
+  }
+  if (!candidates.length) return [line];
+  candidates.sort((a, b) => a.score - b.score);
+  const best = candidates[0];
+  return [best.left, best.right].flatMap(part => part.length > 44 ? splitLyricLine(part) : [part]);
+}
+
+function makeSlideChunks(lines, limit, suggest) {
+  const groups = groupExplicitSlides(lines);
+  if (!suggest) return groups.length ? groups : [[]];
+  const chunks = [];
+  for (const group of groups) {
+    let pending = [];
+    function flush() { if (pending.length) { chunks.push(pending); pending = []; } }
+    for (const sourceLine of group) {
+      const parts = splitLyricLine(sourceLine);
+      // Keep a wrapped phrase together instead of attaching half to its neighbor.
+      if (parts.length > 1) {
+        flush();
+        for (let i = 0; i < parts.length; i += limit) chunks.push(parts.slice(i, i + limit));
+      } else {
+        pending.push(parts[0]);
+        if (pending.length >= limit) flush();
+      }
+    }
+    flush();
+  }
+  return chunks.length ? chunks : [[]];
+}
+
+function buildSlides(sections, tokens, linesPerSlide, suggest) {
+  const slides = [], missing = [];
+  for (const token of tokens) {
+    const key = sectionKey(token), section = sections[key];
+    if (key === 'blank' || (section && !section.lines.some(line => line.trim()))) {
+      slides.push({ label: section?.label || 'Blank', lines: [], part: 1, total: 1, blank: true });
+    } else if (!section) missing.push(token);
+    else {
+      const chunks = makeSlideChunks(section.lines, linesPerSlide, suggest);
+      chunks.forEach((lines, index) => slides.push({ label: section.label, lines, part: index + 1, total: chunks.length, blank: false }));
+    }
+  }
+  return { slides, missing };
+}
+
+function renderSlides(slides) {
+  slidesGridEl.replaceChildren();
+  if (!slides.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-preview';
+    empty.textContent = 'Import a lyric PDF to build your song.';
+    slidesGridEl.appendChild(empty);
+  }
+  slides.forEach((slide, index) => {
+    const card = document.createElement('div');
+    card.className = 'slide-card' + (slide.blank ? ' blank' : '');
+    const label = document.createElement('div');
+    label.className = 'slide-label';
+    label.textContent = slide.label + (slide.total > 1 ? ' · ' + slide.part + '/' + slide.total : '');
+    const number = document.createElement('div');
+    number.className = 'slide-number';
+    number.textContent = String(index + 1);
+    const text = document.createElement('div');
+    text.className = 'slide-text';
+    text.textContent = slide.blank ? 'BLANK' : slide.lines.join('\n');
+    card.append(label, number, text);
+    slidesGridEl.appendChild(card);
+  });
+}
+
+function buildArrangedLyrics(slides) {
+  return slides.map(slide => '[' + slide.label + (slide.total > 1 ? ' ' + slide.part + '/' + slide.total : '') + ']'
+    + (slide.blank ? '\n(blank slide)' : '\n' + slide.lines.join('\n'))).join('\n\n');
+}
+
+function proclaimHeading(label) {
+  // Proclaim's built-in headings are plain; other section names use its custom-tag syntax.
+  return BUILTIN_PROCLAIM_RE.test(label) ? label.toUpperCase() : '{' + label + '}';
+}
+
+function buildProclaimImport(sections, limit, suggest) {
+  return Object.values(sections).filter(section => section.label.toLowerCase() !== 'blank' && section.lines.some(line => line.trim()))
+    .map(section => proclaimHeading(section.label) + '\n'
+      + makeSlideChunks(section.lines, limit, suggest).map(lines => lines.join('\n')).join('\n\n')).join('\n\n');
+}
+
+function buildProclaimOrder(sections, tokens) {
+  return tokens.map(token => {
+    const section = sections[sectionKey(token)];
+    if (sectionKey(token) === 'blank' || (section && !section.lines.some(line => line.trim()))) return 'Blank';
+    return section?.label || token;
+  }).join(', ');
+}
+
+function renderPreflight(tokens, sections, missing, slides) {
+  const warnings = [...importWarnings, ...(sections._issues || [])];
+  const hasContent = pieceEl.value.trim() || arrangementEl.value.trim();
+  if (hasContent && !tokens.length) warnings.push('Add the section names to the song order.');
+  for (const label of new Set(missing)) warnings.push('“' + label + '” is in the song order but has no lyric section.');
+  if (slides.some(slide => !slide.blank && slide.lines.length > 4)) warnings.push('Some slides have more than four lines. Review their fit.');
+  if (slides.some(slide => slide.lines.some(line => line.length > 48))) warnings.push('Some lyric lines are long. Review their fit or add a line break.');
+  warningCountEl.textContent = warnings.length + (warnings.length === 1 ? ' item to review' : ' items to review');
+  preflightMessagesEl.replaceChildren();
+  for (const message of warnings) {
+    const item = document.createElement('div');
+    item.className = 'check-message warning';
+    item.textContent = message;
+    preflightMessagesEl.appendChild(item);
+  }
+  if (!warnings.length) {
+    const ready = document.createElement('div');
+    ready.className = 'check-message' + (slides.length ? ' success' : '');
+    ready.textContent = slides.length ? 'Ready to copy lyrics and song order.' : 'Import a PDF or load the example to begin.';
+    preflightMessagesEl.appendChild(ready);
+  }
+}
+
+function generate() {
+  const sections = parsePiece(pieceEl.value), tokens = parseArrangement(arrangementEl.value);
+  const limit = Number(linesPerSlideEl.value) || 2, suggest = suggestBreaksEl.checked;
+  const result = buildSlides(sections, tokens, limit, suggest);
+  renderSlides(result.slides);
+  renderPreflight(tokens, sections, result.missing, result.slides);
+  arrangedLyricsEl.textContent = buildArrangedLyrics(result.slides);
+  proclaimImportEl.textContent = buildProclaimImport(sections, limit, suggest);
+  proclaimOrderEl.textContent = buildProclaimOrder(sections, tokens);
+  const invalid = result.missing.length > 0 || (sections._issues || []).length > 0;
+  document.getElementById('copyProclaim').disabled = invalid || !proclaimImportEl.textContent;
+  document.getElementById('downloadText').disabled = invalid || !proclaimImportEl.textContent;
+  document.getElementById('copyOrder').disabled = invalid || !tokens.length;
+  document.getElementById('songSummary').textContent = result.slides.length
+    ? Object.values(sections).filter(s => s.lines.some(line => line.trim())).length + ' lyric sections · ' + tokens.length + ' entries in song order · ' + result.slides.length + ' slides' : '';
+  if (!whitespaceDebugEl.hidden) whitespaceDebugEl.innerHTML = annotateWhitespace(pieceEl.value);
+}
+
+function applySuggestedBreaks() {
+  const sections = parsePiece(pieceEl.value);
+  if (sections._issues?.length) return showExportStatus('Resolve the duplicate section headings first.', true);
+  if (!Object.keys(sections).length) return;
+  const limit = Number(linesPerSlideEl.value) || 2;
+  pieceEl.value = Object.values(sections).map(section => {
+    const label = HEADER_LINE_RE.test(section.label) ? section.label : '{' + section.label + '}';
+    return label + (section.lines.length ? '\n' + makeSlideChunks(section.lines, limit, true).map(lines => lines.join('\n')).join('\n\n') : '');
+  }).join('\n\n');
+  suggestBreaksEl.checked = false;
+  generate();
+  showExportStatus('Slide breaks applied. Blank lines now control your slides.');
+}
+
+function annotateWhitespace(text) {
+  let html = '';
+  for (const char of text) {
+    const code = char.codePointAt(0);
+    if (code === 10) html += '\n';
+    else if (code === 32) html += '<mark class="sp" title="Space">·</mark>';
+    else if (code === 160) html += '<mark class="nbsp" title="Non-breaking space">NBSP</mark>';
+    else if (code === 9) html += '<mark class="tab" title="Tab">TAB</mark>';
+    else if (code < 32 || code === 0x2028 || code === 0x2029 || code === 0xFEFF || (code >= 0x2000 && code <= 0x200F)) {
+      html += '<mark class="other">U+' + code.toString(16).toUpperCase().padStart(4, '0') + '</mark>';
+    } else html += char.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+  return html;
+}
+
+async function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    try { await navigator.clipboard.writeText(text); return; } catch (_) { /* Try the local-file fallback. */ }
+  }
+  const helper = document.createElement('textarea');
+  helper.value = text;
+  helper.style.position = 'fixed';
+  helper.style.opacity = '0';
+  document.body.appendChild(helper);
+  helper.select();
+  const copied = document.execCommand('copy');
+  helper.remove();
+  if (!copied) throw new Error('Select and copy the text from the output below.');
+}
+
+function showExportStatus(message, isError = false) {
+  exportStatusEl.textContent = message;
+  exportStatusEl.style.color = isError ? 'var(--danger)' : 'var(--success-text)';
+  window.clearTimeout(showExportStatus.timer);
+  showExportStatus.timer = window.setTimeout(() => { exportStatusEl.textContent = ''; }, 5000);
+}
+
+// Match PDF text to the colors of the actual painted glyphs. Text items alone
+// do not separate colors: one item can contain both black lyrics and a red cue.
+function colorTextKey(text) {
+  return text.normalize('NFKC').replace(/[\s\u00ad\u200b-\u200f\ufeff]/g, '');
+}
+
+function readColoredGlyphs(operatorList, OPS) {
+  const glyphs = [], stack = [];
+  let red = false;
+  for (let i = 0; i < operatorList.fnArray.length; i++) {
+    const op = operatorList.fnArray[i], args = operatorList.argsArray[i];
+    if (op === OPS.save || op === OPS.paintFormXObjectBegin) stack.push(red);
+    else if (op === OPS.restore || op === OPS.paintFormXObjectEnd) red = stack.pop() ?? false;
+    else if (op === OPS.setFillRGBColor) {
+      let rgb = args;
+      if (typeof args[0] === 'string') {
+        const hex = args[0].replace('#', '');
+        rgb = [0, 2, 4].map(offset => parseInt(hex.slice(offset, offset + 2), 16));
+      }
+      red = rgb[0] - rgb[1] > 20 && rgb[0] - rgb[2] > 20;
+    } else if (op === OPS.setFillGray) red = false;
+    else if (op === OPS.setFillCMYKColor) {
+      const [c, m, y, k] = args;
+      const rgb = [c, m, y].map(value => 255 * (1 - value) * (1 - k));
+      red = rgb[0] - rgb[1] > 20 && rgb[0] - rgb[2] > 20;
+    } else if ([OPS.showText, OPS.showSpacedText, OPS.nextLineShowText, OPS.nextLineSetSpacingShowText].includes(op)) {
+      for (const glyph of args.flat()) {
+        if (!glyph || typeof glyph !== 'object' || !glyph.unicode) continue;
+        for (const char of colorTextKey(glyph.unicode)) glyphs.push({ char, isRed: red });
+      }
+    }
+  }
+  return glyphs;
+}
+
+async function extractColoredLines(pdf, onProgress = () => {}) {
+  const allLines = [];
+  for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+    onProgress(pageNum, pdf.numPages);
+    const page = await pdf.getPage(pageNum);
+    const [textContent, operatorList] = await Promise.all([page.getTextContent(), page.getOperatorList()]);
+    const textItems = textContent.items.filter(item => typeof item.str === 'string');
+    const glyphs = readColoredGlyphs(operatorList, pdfjsLib.OPS);
+    const expected = colorTextKey(textItems.map(item => item.str).join(''));
+    if (glyphs.map(glyph => glyph.char).join('') !== expected) {
+      throw new Error('The text colors on page ' + pageNum + ' could not be read reliably. Try exporting a fresh text-based PDF.');
+    }
+    const viewport = page.getViewport({ scale: 1 });
+    let cursor = 0;
+    const items = [];
+    for (const item of textItems) {
+      const runs = [];
+      for (const char of item.str) {
+        const key = colorTextKey(char);
+        const isRed = key ? glyphs[cursor]?.isRed || false : runs.at(-1)?.isRed || false;
+        cursor += [...key].length;
+        if (runs.at(-1)?.isRed === isRed) runs.at(-1).text += char;
+        else runs.push({ text: char, isRed });
+      }
+      if (!item.str.trim()) continue;
+      const transform = pdfjsLib.Util.transform(viewport.transform, item.transform);
+      items.push({ x: transform[4], y: transform[5], width: item.width || 0,
+        height: Math.hypot(transform[2], transform[3]) || 12, text: item.str, runs });
+    }
+    items.sort((a, b) => a.y - b.y || a.x - b.x);
+    const rows = [];
+    for (const item of items) {
+      let row = rows.at(-1);
+      if (!row || Math.abs(item.y - row.y) > Math.max(1.5, item.height * 0.22)) {
+        row = { y: item.y, items: [] };
+        rows.push(row);
+      }
+      row.items.push(item);
+    }
+    for (const row of rows) {
+      row.items.sort((a, b) => a.x - b.x);
+      const spans = [];
+      let previous = null;
+      for (const item of row.items) {
+        if (previous && !/\s$/.test(previous.text) && !/^\s/.test(item.text)
+          && item.x - previous.x - previous.width > item.height * 0.12) spans.push({ text: ' ', isRed: false });
+        spans.push(...item.runs);
+        previous = item;
+      }
+      const text = joinPdfSpans(spans);
+      if (row.y > viewport.height * 0.9 && /^(?:page\s*)?\d+(?:\s*(?:of|\/)\s*\d+)?$/i.test(text)) continue;
+      allLines.push({ page: pageNum, y: row.y, spans });
+    }
+    page.cleanup();
+  }
+  return allLines;
+}
+
+function parsePdfSectionHeader(text) {
+  const bracketed = text.match(/^\s*\[([^\]]+)\]/);
+  const candidate = bracketed ? bracketed[1] : text;
+  const match = candidate.match(PDF_SECTION_HEADER_RE);
+  if (!match) return null;
+  const assignment = candidate.slice(match[0].length).match(/^\s*:\s*(.+)$/);
+  let singer = assignment ? assignment[1].trim() : '';
+  // Repeat counts and separately delimited directions are not singer names.
+  singer = singer.split(/[;|]/, 1)[0]
+    .replace(/\s*\(?\s*(?:(?:[xX]|×)\s*\d+|repeat\s+\d+)\s*\)?\s*$/i, '').trim();
+  if (PDF_DIRECTION_RE.test(singer) || OPTIONAL_VOCALS_RE.test(singer)) singer = '';
+  return { label: canonicalBase(match[1]), sourceNumber: match[2] ? String(Number(match[2])) : '', singer,
+    repeat: readRepeatCount(candidate), optional: OPTIONAL_VOCALS_RE.test(candidate),
+    remainder: bracketed ? text.slice(bracketed[0].length).trim() : '' };
+}
+
+function readRepeatCount(text) {
+  const match = text.match(/(?:\b[xX]|×)\s*(\d+)\b|\brepeat\s+(\d+)\b/i);
+  return match ? Math.max(1, Math.min(32, Number(match[1] || match[2]))) : 1;
+}
+
+function joinPdfSpans(spans) {
+  return spans.map(span => span.text).join('').replace(/\s+([,.;:!?])/g, '$1').replace(/\s+/g, ' ').trim();
+}
+
+function blankSegment() { return { label: 'Blank', lines: [], isBlank: true, repeat: 1 }; }
+
+function lyricsAfterPdfHeader(spans) {
+  const end = spans.map(span => span.text).join('').indexOf(']');
+  if (end < 0) return '';
+  let offset = 0;
+  const trailing = spans.map(span => {
+    const text = span.text.slice(Math.max(0, end + 1 - offset));
+    offset += span.text.length;
+    return { text, isRed: span.isRed };
+  });
+  return joinPdfSpans(trailing.filter(span => !span.isRed)).replace(/\(\s*\)|\[\s*\]/g, '').trim();
+}
+
+function parsePdfLines(lines) {
+  const segments = [];
+  let current = null, title = '';
+  for (const line of lines) {
+    const meaningful = line.spans.filter(span => span.text.trim());
+    if (!meaningful.length) continue;
+    const fullText = joinPdfSpans(line.spans);
+    const redText = joinPdfSpans(line.spans.filter(span => span.isRed));
+    const blackText = joinPdfSpans(line.spans.filter(span => !span.isRed)).replace(/\(\s*\)|\[\s*\]/g, '').trim();
+    const allRed = meaningful.every(span => span.isRed);
+    const header = (allRed || /^\s*\[/.test(fullText) || parseEditableHeader(fullText)) ? parsePdfSectionHeader(fullText) : null;
+    if (header) {
+      // Only take assignments painted red, even if the PDF combines colors.
+      const singer = header.singer && colorTextKey(redText).includes(colorTextKey(header.singer)) ? header.singer : '';
+      current = header.optional ? blankSegment() : { label: header.label, sourceNumber: header.sourceNumber,
+        singer, lines: [], repeat: header.repeat };
+      segments.push(current);
+      if (header.optional) current = null;
+      else if (header.remainder) {
+        const lyric = lyricsAfterPdfHeader(line.spans);
+        if (lyric) current.lines.push(lyric);
+      }
+      continue;
+    }
+    if (OPTIONAL_VOCALS_RE.test(redText) && allRed) {
+      if (current) Object.assign(current, blankSegment());
+      else segments.push(blankSegment());
+      current = null;
+      continue;
+    }
+    if (current && readRepeatCount(redText) > 1) current.repeat = readRepeatCount(redText);
+    if (!segments.length && blackText && !title) title = blackText;
+    if (blackText && current && !(line.y < 85 && blackText === title)) current.lines.push(blackText);
+  }
+  return segments;
+}
+
+function repetitionFactor(body, candidate) {
+  if (!candidate) return body ? 0 : 1;
+  const factor = (body.length + 1) / (candidate.length + 1);
+  return Number.isInteger(factor) && factor >= 1 && factor <= 64
+    && Array(factor).fill(candidate).join(' ') === body ? factor : 0;
+}
+
+function buildLyricsText(segments) {
+  const records = segments.map((segment, index) => ({ ...segment, index,
+    base: canonicalBase(segment.label.replace(/\s*\d+$/, '')),
+    sourceNumber: segment.sourceNumber || '', singer: segment.singer || '',
+    singerKey: (segment.singer || '').normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim(),
+    lines: segment.lines.map(line => line.trim()).filter(Boolean), signature: lyricSignature(segment.lines) }));
+  const families = new Map();
+  for (const record of records) {
+    if (record.isBlank || record.base === 'Blank') continue;
+    if (!families.has(record.base)) families.set(record.base, []);
+    families.get(record.base).push(record);
+  }
+  for (const [base, family] of families) {
+    const candidates = [...family].sort((a, b) => a.signature.length - b.signature.length || a.index - b.index);
+    const variants = new Map();
+    for (const record of family) {
+      // A longer section made solely of complete repeats uses the shorter
+      // existing definition; the repeats move into the song order.
+      const representative = candidates.find(candidate => candidate.singerKey === record.singerKey
+        && candidate.sourceNumber === record.sourceNumber
+        && repetitionFactor(record.signature, candidate.signature)) || record;
+      const variantKey = JSON.stringify([record.sourceNumber, record.singerKey, representative.signature]);
+      let variant = variants.get(variantKey);
+      if (!variant) {
+        variant = { representative, firstIndex: record.index };
+        variants.set(variantKey, variant);
+      }
+      record.variant = variant;
+      record.factor = repetitionFactor(record.signature, representative.signature) || 1;
+    }
+    const ordered = [...variants.values()].sort((a, b) => a.firstIndex - b.firstIndex);
+    const reserved = new Set(ordered.map(variant => variant.representative.sourceNumber).filter(Boolean));
+    const used = new Set();
+    for (const variant of ordered) {
+      let number = variant.representative.sourceNumber;
+      if (!number && ordered.length === 1) { variant.label = base; continue; }
+      if (!number || used.has(number)) {
+        let next = 1;
+        while (used.has(String(next)) || reserved.has(String(next))) next++;
+        number = String(next);
+      }
+      used.add(number);
+      variant.label = base + ' ' + number;
+    }
+  }
+  const pieceOrder = [], arrangementTokens = [], seen = new Set();
+  for (const record of records) {
+    if (record.isBlank || record.base === 'Blank') { arrangementTokens.push('Blank'); continue; }
+    const variant = record.variant;
+    if (!seen.has(variant)) {
+      seen.add(variant);
+      const lines = [...variant.representative.lines];
+      if (lines.length && variant.representative.singer) lines[0] = '[' + variant.representative.singer + '] ' + lines[0];
+      pieceOrder.push({ label: variant.label, lines });
+    }
+    const repetitions = record.signature ? record.factor * (record.repeat || 1) : 1;
+    for (let i = 0; i < repetitions; i++) arrangementTokens.push(variant.label);
+  }
+  return { arrangementText: arrangementTokens.join(', '),
+    pieceText: pieceOrder.map(section => section.label + (section.lines.length ? '\n' + section.lines.join('\n') : '')).join('\n\n') };
+}
+
+async function handlePdfFile(file) {
+  const request = ++importRequest;
+  const status = document.getElementById('pdfStatus');
+  const button = document.getElementById('importPdfBtn');
+  button.disabled = true;
+  status.textContent = 'Reading ' + file.name + '…';
+  let pdf, loadingTask;
+  try {
+    if (!window.pdfjsLib) throw new Error('The PDF reader did not load. Connect to the internet and reopen this file.');
+    loadingTask = pdfjsLib.getDocument({ data: await file.arrayBuffer(), isEvalSupported: false });
+    pdf = await loadingTask.promise;
+    const lines = await extractColoredLines(pdf, (page, total) => {
+      if (request === importRequest) status.textContent = 'Reading ' + file.name + ' · page ' + page + ' of ' + total + '…';
+    });
+    if (request !== importRequest) return;
+    if (!lines.length) throw new Error('This PDF has no selectable text. Export a text-based PDF instead of a scan.');
+    const segments = parsePdfLines(lines);
+    if (!segments.length) throw new Error('No song-section headings were found. Use headings such as Verse, Chorus, or Bridge.');
+    const built = buildLyricsText(segments);
+    arrangementEl.value = built.arrangementText;
+    pieceEl.value = built.pieceText;
+    importWarnings = [];
+    songFilename = file.name.replace(/\.pdf$/i, '').replace(/[<>:"/\\|?*\x00-\x1f]/g, '-').trim() || 'lyrics';
+    whitespaceDebugEl.hidden = true;
+    pieceEl.hidden = false;
+    document.getElementById('inspectWhitespace').textContent = 'Inspect whitespace';
+    suggestBreaksEl.checked = true;
+    generate();
+    status.textContent = file.name + ' · imported ' + segments.length + ' sections from ' + pdf.numPages + (pdf.numPages === 1 ? ' page.' : ' pages.');
+  } catch (error) {
+    if (request === importRequest) status.textContent = 'Could not import ' + file.name + ': ' + error.message
+      + (pieceEl.value.trim() ? ' The previous song is still shown.' : '');
+  } finally {
+    if (pdf) await pdf.destroy();
+    else if (loadingTask) await loadingTask.destroy();
+    if (request === importRequest) button.disabled = false;
+  }
+}
+
+const EXAMPLE_ARRANGEMENT = 'Verse 1, Chorus, Verse 2, Chorus, Interlude, Bridge, Bridge, Chorus, Blank';
+const EXAMPLE_PIECE = `Verse 1
+[Taty] This is the first verse
+Its words are written once
+
+Verse 2
+[Jordan] This verse has different words
+So it gets another number
+
+Chorus
+[All] We sing these words together
+And sing them once again
+
+Interlude
+
+Bridge
+[Taty & Jordan] The bridge keeps the same name
+Each time these lyrics return`;
+
+for (const element of [arrangementEl, pieceEl]) element.addEventListener('input', generate);
+linesPerSlideEl.addEventListener('change', generate);
+suggestBreaksEl.addEventListener('change', generate);
+document.getElementById('applyBreaks').addEventListener('click', applySuggestedBreaks);
+document.getElementById('inspectWhitespace').addEventListener('click', () => {
+  const showing = !whitespaceDebugEl.hidden;
+  whitespaceDebugEl.hidden = showing;
+  pieceEl.hidden = !showing;
+  document.getElementById('inspectWhitespace').textContent = showing ? 'Inspect whitespace' : 'Edit lyrics';
+  if (!showing) whitespaceDebugEl.innerHTML = annotateWhitespace(pieceEl.value);
+});
+document.getElementById('fixLineBreaks').addEventListener('click', () => {
+  pieceEl.value = normalizeLineBreaks(pieceEl.value);
+  generate();
+});
+function resetImportState() {
+  importRequest++;
+  importWarnings = [];
+  songFilename = 'lyrics';
+  document.getElementById('importPdfBtn').disabled = false;
+  document.getElementById('pdfStatus').textContent = '';
+}
+document.getElementById('loadExample').addEventListener('click', () => {
+  resetImportState();
+  arrangementEl.value = EXAMPLE_ARRANGEMENT;
+  pieceEl.value = EXAMPLE_PIECE;
+  suggestBreaksEl.checked = true;
+  generate();
+});
+document.getElementById('clearAll').addEventListener('click', () => {
+  resetImportState();
+  arrangementEl.value = '';
+  pieceEl.value = '';
+  generate();
+});
+document.getElementById('copyProclaim').addEventListener('click', async () => {
+  try { await copyText(proclaimImportEl.textContent); showExportStatus('Lyrics copied. Paste into the song’s lyrics box in Proclaim.'); }
+  catch (error) { showExportStatus(error.message, true); }
+});
+document.getElementById('copyOrder').addEventListener('click', async () => {
+  try { await copyText(proclaimOrderEl.textContent); showExportStatus('Song order copied. Paste into Proclaim’s custom verse order.'); }
+  catch (error) { showExportStatus(error.message, true); }
+});
+document.getElementById('downloadText').addEventListener('click', () => {
+  const blob = new Blob([proclaimImportEl.textContent], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob), link = document.createElement('a');
+  link.href = url;
+  link.download = songFilename + '-lyrics.txt';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  showExportStatus('Lyrics downloaded. Copy the song order separately.');
+});
+if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+document.getElementById('importPdfBtn').addEventListener('click', () => document.getElementById('pdfInput').click());
+document.getElementById('pdfInput').addEventListener('change', event => {
+  const file = event.target.files[0];
+  if (file) handlePdfFile(file);
+  event.target.value = '';
+});
+generate();
+</script>
+<script>
+(() => {
+  const fonts = {
+    arial: 'Arial, "Helvetica Neue", Helvetica, sans-serif',
+    verdana: 'Verdana, Geneva, sans-serif',
+    georgia: 'Georgia, "Times New Roman", serif',
+    mono: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'
+  };
+  const fontMenu = document.getElementById('appFont');
+  function applyFont(choice) {
+    const selected = Object.prototype.hasOwnProperty.call(fonts, choice) ? choice : 'arial';
+    document.documentElement.style.setProperty('--app-font', fonts[selected]);
+    fontMenu.value = selected;
+  }
+  let savedFont = 'arial';
+  try { savedFont = localStorage.getItem('lyrics-builder-font') || 'arial'; } catch (_) { /* Local preferences may be unavailable. */ }
+  applyFont(savedFont);
+  fontMenu.addEventListener('change', () => {
+    applyFont(fontMenu.value);
+    try { localStorage.setItem('lyrics-builder-font', fontMenu.value); } catch (_) { /* The font still applies for this visit. */ }
+  });
+})();
+</script>
+</body>
+</html>
