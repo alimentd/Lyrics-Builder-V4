@@ -152,7 +152,7 @@
     position: relative;
     display: grid;
     place-items: center;
-    aspect-ratio: 16 / 9;
+    /* Allow complete vocal instructions to expand the preview card. */
     min-height: 140px;
     overflow: hidden;
     padding: 38px 18px 22px;
@@ -229,7 +229,7 @@
       </div>
       <textarea aria-label="Lyric sections" id="piece" spellcheck="false" placeholder="Verse 1&#10;Lyric line one&#10;Lyric line two&#10;&#10;Chorus&#10;Chorus lyric line"></textarea>
       <pre id="whitespaceDebug" hidden></pre>
-      <p class="field-help">Singer names appear in brackets on each section’s first lyric line. Blank lines set slide breaks after you apply them.</p>
+      <p class="field-help">Vocal instructions appear in brackets. Changed instructions get separate sections. Blank lines set slide breaks after you apply them.</p>
     </div>
   </section>
 
@@ -280,12 +280,11 @@
 
 <script>
 // Lyric sections are stored once. The song order carries every repetition.
-const SECTION_KIND = '(?:post[ -]*chorus|pre[ -]*chorus|verse|chorus|bridge|refrain|tag|interlude|instrumental|intro|outro|vamp|coda|turnaround|break[ -]*down|break|end(?:ing)?|solo|prelude|postlude|blank)';
+const SECTION_KIND = '(?:post[ -]*chorus|pre[ -]*chorus|verse|chorus|bridge|refrain|tag|interlude|instrumental|intro|outro|vamp|coda|turn[ -]*around|turn[ -]*out|break[ -]*down|break|end(?:ing)?|solo|prelude|postlude|blank)';
 const HEADER_TOKEN = SECTION_KIND + '\\s*\\d*';
 const HEADER_LINE_RE = new RegExp('^(' + SECTION_KIND + ')\\s*(\\d*)$', 'i');
 const PDF_SECTION_HEADER_RE = new RegExp('^\\s*(' + SECTION_KIND + ')(?:\\s*(\\d+))?(?=\\s|:|/|&|$)', 'i');
 const OPTIONAL_VOCALS_RE = /\boptional\s+(?:vocals?|ad[ -]*libs?)\b|\bad[ -]*libs?\b/i;
-const PDF_DIRECTION_RE = /^(?:build|soft|quiet|loud|full\s+band|instrumental|no\s+vocals?|repeat|[x×]\s*\d+)(?:\s*[.!])?$/i;
 const BUILTIN_PROCLAIM_RE = /^(?:verse|chorus|pre-chorus|bridge|tag|interlude|blank)(?:\s+\d+)?$/i;
 const arrangementEl = document.getElementById('arrangement');
 const pieceEl = document.getElementById('piece');
@@ -403,11 +402,11 @@ function groupExplicitSlides(lines) {
 
 function splitLyricLine(text) {
   const line = text.trim().replace(/\s+/g, ' ');
-  // Keep a singer cue intact and attached to the first lyric phrase.
-  const singerCue = line.match(/^(\[[^\]\r\n]+\])\s+(.+)$/);
-  if (singerCue) {
-    const parts = splitLyricLine(singerCue[2]);
-    parts[0] = singerCue[1] + ' ' + parts[0];
+  // Keep the full vocal instruction intact with its first lyric phrase.
+  const vocalCue = line.match(/^(\[[^\]\r\n]+\])\s+(.+)$/);
+  if (vocalCue) {
+    const parts = splitLyricLine(vocalCue[2]);
+    parts[0] = vocalCue[1] + ' ' + parts[0];
     return parts;
   }
   if (line.length < 29) return [line];
@@ -706,15 +705,38 @@ function parsePdfSectionHeader(text) {
   const candidate = bracketed ? bracketed[1] : text;
   const match = candidate.match(PDF_SECTION_HEADER_RE);
   if (!match) return null;
-  const assignment = candidate.slice(match[0].length).match(/^\s*:\s*(.+)$/);
-  let singer = assignment ? assignment[1].trim() : '';
-  // Repeat counts and separately delimited directions are not singer names.
-  singer = singer.split(/[;|]/, 1)[0]
-    .replace(/\s*\(?\s*(?:(?:[xX]|×)\s*\d+|repeat\s+\d+)\s*\)?\s*$/i, '').trim();
-  if (PDF_DIRECTION_RE.test(singer) || OPTIONAL_VOCALS_RE.test(singer)) singer = '';
-  return { label: canonicalBase(match[1]), sourceNumber: match[2] ? String(Number(match[2])) : '', singer,
+  // Everything after the colon is a vocal assignment, including harmony,
+  // unison, entrances, dynamics and accompaniment instructions.
+  const colon = candidate.indexOf(':');
+  const rawInstruction = colon >= 0 ? candidate.slice(colon + 1).trim() : '';
+  const instruction = cleanPdfInstruction(rawInstruction);
+  return { label: canonicalBase(match[1]), sourceNumber: match[2] ? String(Number(match[2])) : '',
+    instruction, rawInstruction,
     repeat: readRepeatCount(candidate), optional: OPTIONAL_VOCALS_RE.test(candidate),
     remainder: bracketed ? text.slice(bracketed[0].length).trim() : '' };
+}
+
+function cleanPdfInstruction(text) {
+  // Repetition belongs in the song order, not in the bracketed instruction.
+  return text.replace(/\(\s*(?:(?:[xX]|×)\s*\d+|repeat\s+\d+)\s*\)/gi, '')
+    .replace(/(?:^|\s)(?:(?:[xX]|×)\s*\d+|repeat\s+\d+)(?=\s|$)/gi, ' ')
+    .replace(/\s+/g, ' ').trim();
+}
+
+function vocalInstructionKey(text) {
+  return text.normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function addPdfInstruction(segment, text) {
+  const instruction = cleanPdfInstruction(text);
+  if (!instruction) return;
+  const cues = segment.cues;
+  const last = cues.at(-1);
+  const lineIndex = segment.lines.length;
+  if (last && last.lineIndex === lineIndex) last.text = instruction;
+  else if (!last || vocalInstructionKey(last.text) !== vocalInstructionKey(instruction)) {
+    cues.push({ lineIndex, text: instruction });
+  }
 }
 
 function readRepeatCount(text) {
@@ -726,7 +748,7 @@ function joinPdfSpans(spans) {
   return spans.map(span => span.text).join('').replace(/\s+([,.;:!?])/g, '$1').replace(/\s+/g, ' ').trim();
 }
 
-function blankSegment() { return { label: 'Blank', lines: [], isBlank: true, repeat: 1 }; }
+function blankSegment() { return { label: 'Blank', lines: [], cues: [], isBlank: true, repeat: 1 }; }
 
 function lyricsAfterPdfHeader(spans) {
   const end = spans.map(span => span.text).join('').indexOf(']');
@@ -753,14 +775,18 @@ function parsePdfLines(lines) {
     const header = (allRed || /^\s*\[/.test(fullText) || parseEditableHeader(fullText)) ? parsePdfSectionHeader(fullText) : null;
     if (header) {
       // Only take assignments painted red, even if the PDF combines colors.
-      const singer = header.singer && colorTextKey(redText).includes(colorTextKey(header.singer)) ? header.singer : '';
+      const instruction = header.rawInstruction && colorTextKey(redText).includes(colorTextKey(header.rawInstruction))
+        ? header.instruction : '';
       current = header.optional ? blankSegment() : { label: header.label, sourceNumber: header.sourceNumber,
-        singer, lines: [], repeat: header.repeat };
+        cues: [], lines: [], repeat: header.repeat };
       segments.push(current);
       if (header.optional) current = null;
-      else if (header.remainder) {
-        const lyric = lyricsAfterPdfHeader(line.spans);
-        if (lyric) current.lines.push(lyric);
+      else {
+        addPdfInstruction(current, instruction);
+        if (header.remainder) {
+          const lyric = lyricsAfterPdfHeader(line.spans);
+          if (lyric) current.lines.push(lyric);
+        }
       }
       continue;
     }
@@ -771,6 +797,19 @@ function parsePdfLines(lines) {
       continue;
     }
     if (current && readRepeatCount(redText) > 1) current.repeat = readRepeatCount(redText);
+    const cue = fullText.match(/^\s*\[([^\]]+)\]/);
+    if (cue && colorTextKey(redText).includes(colorTextKey(cue[1]))) {
+      if (/^ends?\s+on\s+(?:interlude|instrumental|blank|outro)\b/i.test(cue[1])) {
+        segments.push(blankSegment());
+        current = null;
+      } else if (current) {
+        // A standalone red cue changes the next lyric line in this section.
+        addPdfInstruction(current, cue[1]);
+        const lyric = lyricsAfterPdfHeader(line.spans);
+        if (lyric) current.lines.push(lyric);
+      }
+      continue;
+    }
     if (!segments.length && blackText && !title) title = blackText;
     if (blackText && current && !(line.y < 85 && blackText === title)) current.lines.push(blackText);
   }
@@ -785,11 +824,20 @@ function repetitionFactor(body, candidate) {
 }
 
 function buildLyricsText(segments) {
-  const records = segments.map((segment, index) => ({ ...segment, index,
-    base: canonicalBase(segment.label.replace(/\s*\d+$/, '')),
-    sourceNumber: segment.sourceNumber || '', singer: segment.singer || '',
-    singerKey: (segment.singer || '').normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim(),
-    lines: segment.lines.map(line => line.trim()).filter(Boolean), signature: lyricSignature(segment.lines) }));
+  const records = segments.map((segment, index) => {
+    const lines = segment.lines.map(line => line.trim()).filter(Boolean);
+    const fallback = segment.instruction || segment.singer || '';
+    const cues = (segment.cues || (fallback ? [{ lineIndex: 0, text: fallback }] : []))
+      .map(cue => ({ text: cue.text,
+        lineIndex: segment.lines.slice(0, cue.lineIndex).filter(line => line.trim()).length }))
+      .filter(cue => cue.lineIndex < lines.length);
+    // Compare instruction text AND its position in the lyrics. PDF line
+    // wrapping alone does not create a different instruction sequence.
+    const cueKey = JSON.stringify(cues.map(cue => [lyricSignature(lines.slice(0, cue.lineIndex)).length,
+      vocalInstructionKey(cue.text)]));
+    return { ...segment, index, base: canonicalBase(segment.label.replace(/\s*\d+$/, '')),
+      sourceNumber: segment.sourceNumber || '', lines, cues, cueKey, signature: lyricSignature(lines) };
+  });
   const families = new Map();
   for (const record of records) {
     if (record.isBlank || record.base === 'Blank') continue;
@@ -802,10 +850,13 @@ function buildLyricsText(segments) {
     for (const record of family) {
       // A longer section made solely of complete repeats uses the shorter
       // existing definition; the repeats move into the song order.
-      const representative = candidates.find(candidate => candidate.singerKey === record.singerKey
-        && candidate.sourceNumber === record.sourceNumber
-        && repetitionFactor(record.signature, candidate.signature)) || record;
-      const variantKey = JSON.stringify([record.sourceNumber, record.singerKey, representative.signature]);
+      const representative = candidates.find(candidate => {
+        const factor = repetitionFactor(record.signature, candidate.signature);
+        return factor && candidate.cueKey === record.cueKey && candidate.sourceNumber === record.sourceNumber
+          // A mid-section instruction must not silently reset on every repeat.
+          && (factor === 1 || (record.cues.length <= 1 && candidate.cues.length <= 1));
+      }) || record;
+      const variantKey = JSON.stringify([record.sourceNumber, record.cueKey, representative.signature]);
       let variant = variants.get(variantKey);
       if (!variant) {
         variant = { representative, firstIndex: record.index };
@@ -836,7 +887,7 @@ function buildLyricsText(segments) {
     if (!seen.has(variant)) {
       seen.add(variant);
       const lines = [...variant.representative.lines];
-      if (lines.length && variant.representative.singer) lines[0] = '[' + variant.representative.singer + '] ' + lines[0];
+      for (const cue of variant.representative.cues) lines[cue.lineIndex] = '[' + cue.text + '] ' + lines[cue.lineIndex];
       pieceOrder.push({ label: variant.label, lines });
     }
     const repetitions = record.signature ? record.factor * (record.repeat || 1) : 1;
@@ -885,7 +936,7 @@ async function handlePdfFile(file) {
   }
 }
 
-const EXAMPLE_ARRANGEMENT = 'Verse 1, Chorus, Verse 2, Chorus, Interlude, Bridge, Bridge, Chorus, Blank';
+const EXAMPLE_ARRANGEMENT = 'Verse 1, Chorus 1, Verse 2, Chorus 2, Interlude, Bridge, Bridge, Chorus 2, Blank';
 const EXAMPLE_PIECE = `Verse 1
 [Taty] This is the first verse
 Its words are written once
@@ -894,8 +945,12 @@ Verse 2
 [Jordan] This verse has different words
 So it gets another number
 
-Chorus
-[All] We sing these words together
+Chorus 1
+[Everyone Unison] We sing these words together
+And sing them once again
+
+Chorus 2
+[Everyone Parts] We sing these words together
 And sing them once again
 
 Interlude
